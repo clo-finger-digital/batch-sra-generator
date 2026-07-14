@@ -259,7 +259,6 @@ def insert_paragraph_after(paragraph, text, style=None):
     return new_p
 
 def extract_system_name(filename):
-    # Extracts substring following "Follow up plan - " or "Code review - " pattern
     clean_name = os.path.splitext(filename)[0]
     if " - " in clean_name:
         return clean_name.split(" - ", 1)[1].strip()
@@ -271,13 +270,69 @@ global_sam_metrics = {"high": 0, "medium": 0, "low": 0, "aoi": 0}
 
 system_vulnerabilities_map = {} # Maps system -> {"V": [...], "A": [...]}
 system_code_reviews_map = {}    # Maps system -> [...]
+
+# Parse the WAB to extract the 25 distinct systems covered under Section B
+print("Parsing WAB major system description block to compile system inventory list...")
+wab_doc = Document(JS_WAB_NAME)
+
 detected_systems_list = []
+found_major_systems = False
+
+for p in list(wab_doc.paragraphs):
+    txt = p.text.strip()
+    if not txt: continue
+    
+    # Track the boundary of major systems description
+    if "major system description" in txt.lower():
+        found_major_systems = True
+        continue
+    if found_major_systems and "list of systems requiring to conduct pia" in txt.lower():
+        found_major_systems = False
+        break
+        
+    if found_major_systems:
+        # Match potential application names (Title lines before description paragraphs)
+        if len(txt) > 3 and not txt.startswith("This ") and not txt.startswith("A ") and not txt.startswith("Users ") and not txt.startswith("The ") and not txt.startswith("CSB ") and not txt.startswith("Typical ") and not "consists of" in txt:
+            # Clean up the name string
+            cleaned_sys = re.sub(r'\\s*\\(.*\\)\\s*', '', txt).strip()
+            if cleaned_sys and cleaned_sys not in detected_systems_list:
+                detected_systems_list.append(txt)
+
+if not detected_systems_list:
+    # Fallback to defaults if parsing structure deviates
+    detected_systems_list = [
+        "CSB Online Application Systems (CSBOA)",
+        "CSB Human Resource Management Information System (CSB HRMIS)",
+        "Virtualisation Testing Platform (VTP)",
+        "Electronic Glossary System (EGS)",
+        "Database Management Information System for Interdiction Cases (DBMIS)",
+        "Qualification Assessment Database System (QADS)",
+        "Administrative Officer (AO) Recruitment Website",
+        "CSB Homepage, its thematic webpages and thematic website",
+        "CSB Web Content Management System (WCMS)",
+        "Simultaneous Interpreters e-Duty Roster System (SIDRS)",
+        "Chatbot for Handling General Job-related Enquiries for AO/EO Applicants (Chatbot)",
+        "Clerical & Secretarial Grades Recruitment Information System (CSRIS)",
+        "Digitalised Basic Law and National Security Law Test (Degree/Professional Grades) Digitalised Examination System",
+        "Digitalised Basic Law and National Security Law Test (Degree/Professional Grades) Online Application System",
+        "E-Proof for Digital Certificates of Common Recruitment Examination and Basic Law and National Security Law Test (CSB E-Proof)",
+        "Government Holiday Bungalows Online Booking System (GHBOBS)",
+        "Resource Centre on Civil Service Integrity Management (RCIM)",
+        "Thematic website on “Manpower Optimisation”",
+        "Video Conference System (VCS)",
+        "Disciplinary Case System (DCS)",
+        "Official Languages Division (OLD) Intranet",
+        "Shared Online Reservation System (SORS)",
+        "Manage Engine",
+        "Confidential File Repository",
+        "Government Human Resource (GovHR) Data Platform"
+    ]
+
+print(f"Systems populated: {len(detected_systems_list)} items found.")
 
 # Process Follow-Up Plans (V and A rows)
 for pf in list(JS_PLAN_FILES):
     sys_name = extract_system_name(pf)
-    if sys_name not in detected_systems_list:
-        detected_systems_list.append(sys_name)
     if sys_name not in system_vulnerabilities_map:
         system_vulnerabilities_map[sys_name] = {"V": [], "A": []}
         
@@ -348,8 +403,6 @@ for pf in list(JS_PLAN_FILES):
 # Process Code Reviews (C rows)
 for cf in list(JS_CODE_FILES):
     sys_name = extract_system_name(cf)
-    if sys_name not in detected_systems_list:
-        detected_systems_list.append(sys_name)
     if sys_name not in system_code_reviews_map:
         system_code_reviews_map[sys_name] = []
         
@@ -402,8 +455,7 @@ total_code_findings = sum(len(c) for c in system_code_reviews_map.values())
 total_overall_findings = total_plan_findings + total_code_findings
 
 # Ingest structural boundaries from WAB directly
-print("Parsing WAB tokens for environmental and regulatory baselines...")
-wab_doc = Document(JS_WAB_NAME)
+print("Parsing WAB objective boundaries precisely...")
 state = "SEEKING"
 assessment_objective_text = []
 security_requirements = []
@@ -416,10 +468,10 @@ for p in wab_doc.paragraphs:
     normalized_txt = txt.replace('\\xa0', ' ').strip()
     lower_clean = re.sub(r'\\s+', '', normalized_txt.lower()).replace(",", "").replace(":", "")
     
-    if lower_clean == "projectobjectives":
+    if "theobjectivesofsraaservicesare" in lower_clean:
         state = "CAPTURING_OBJECTIVES"
         continue
-    elif state == "CAPTURING_OBJECTIVES" and ("projectrequirements" in lower_clean or "4." in lower_clean):
+    elif state == "CAPTURING_OBJECTIVES" and "theobjectivesofpiaservicesare" in lower_clean:
         state = "SEEKING"
         
     if "governmentstandards" in lower_clean and "methodologies" in lower_clean and not has_captured_requirements:
@@ -441,6 +493,10 @@ for p in wab_doc.paragraphs:
             if cleaned_bullet and cleaned_bullet not in security_requirements: 
                 security_requirements.append(cleaned_bullet)
 
+# Cleaned, text-labeled count strings to represent exact findings dynamically in Section 13
+conclusion_plan_string = f"{global_ops_metrics['medium']} medium, {global_ops_metrics['low']} low risk and {global_ops_metrics['aoi']} AOI items"
+conclusion_code_string = f"{global_sam_metrics['medium']} medium, {global_sam_metrics['low']} low risk and {global_sam_metrics['aoi']} AOI items"
+
 replacements = [
     ("*company name* Limited", company_name),
     ("*company name*", company_name),
@@ -454,8 +510,8 @@ replacements = [
     ("*COMPANY ABBREVIATION*", company_abbr),
     ("COMPANY ABBREVIATION", company_abbr),
     ("*number of risk items*", str(total_overall_findings)),
-    ("*number of follow up plan items*", str(total_plan_findings)),
-    ("*number of code review items*", str(total_code_findings))
+    ("*number of follow up plan items*", conclusion_plan_string),
+    ("*number of code review items*", conclusion_code_string)
 ]
 
 doc = Document("batch_sra_template.docx")
@@ -502,7 +558,7 @@ for p_idx, p in enumerate(list(doc.paragraphs)):
         p.text = current_date_text
         continue
 
-    if "*system names copied from sra 1.1 part b*" in p.text.lower():
+    if "*system names copied from sra 1.1 part b*" in p.text.lower() or "*system names copied from wab 1.1 part b*" in p.text.lower():
         p.text = ""
         current_anchor = p
         for s_name in detected_systems_list:
@@ -625,9 +681,25 @@ for table in doc.tables:
             break
             
     if is_summary_table:
-        for row in table.rows:
+        for r_idx, row in enumerate(table.rows):
             f_cell_text = row.cells[0].text.lower() if row.cells else ""
-            if "operations security" in f_cell_text:
+            
+            # Identify if this is the very last row (the total row right after compliance)
+            is_last_row = (r_idx == len(table.rows) - 1)
+            
+            if is_last_row:
+                # Accumulate multi-domain total summation rows accurately in the final row
+                h_t = global_ops_metrics["high"] + global_sam_metrics["high"]
+                m_t = global_ops_metrics["medium"] + global_sam_metrics["medium"]
+                l_t = global_ops_metrics["low"] + global_sam_metrics["low"]
+                a_t = global_ops_metrics["aoi"] + global_sam_metrics["aoi"]
+                o_t = h_t + m_t + l_t + a_t
+                apply_text_styling_and_borders(row.cells[1], str(h_t), center=True)
+                apply_text_styling_and_borders(row.cells[2], str(m_t), center=True)
+                apply_text_styling_and_borders(row.cells[3], str(l_t), center=True)
+                apply_text_styling_and_borders(row.cells[4], str(a_t), center=True)
+                apply_text_styling_and_borders(row.cells[5], str(o_t), center=True)
+            elif "operations security" in f_cell_text:
                 metrics = [global_ops_metrics["high"], global_ops_metrics["medium"], global_ops_metrics["low"], global_ops_metrics["aoi"]]
                 total_row = sum(metrics)
                 apply_text_styling_and_borders(row.cells[1], str(metrics[0]), center=True)
@@ -643,18 +715,6 @@ for table in doc.tables:
                 apply_text_styling_and_borders(row.cells[3], str(metrics[2]), center=True)
                 apply_text_styling_and_borders(row.cells[4], str(metrics[3]), center=True)
                 apply_text_styling_and_borders(row.cells[5], str(total_row), center=True)
-            elif " " in f_cell_text or "total" in f_cell_text:
-                # Accumulate multi-domain total summation rows accurately
-                h_t = global_ops_metrics["high"] + global_sam_metrics["high"]
-                m_t = global_ops_metrics["medium"] + global_sam_metrics["medium"]
-                l_t = global_ops_metrics["low"] + global_sam_metrics["low"]
-                a_t = global_ops_metrics["aoi"] + global_sam_metrics["aoi"]
-                o_t = h_t + m_t + l_t + a_t
-                apply_text_styling_and_borders(row.cells[1], str(h_t), center=True)
-                apply_text_styling_and_borders(row.cells[2], str(m_t), center=True)
-                apply_text_styling_and_borders(row.cells[3], str(l_t), center=True)
-                apply_text_styling_and_borders(row.cells[4], str(a_t), center=True)
-                apply_text_styling_and_borders(row.cells[5], str(o_t), center=True)
             elif any(domain in f_cell_text for domain in ["management", "policies", "human", "asset", "access", "cryptography", "physical", "communications", "outsourcing", "incident", "business", "compliance"]):
                 # Clear all secondary administrative tracking cells to zero
                 for idx in range(1, 6):
