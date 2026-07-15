@@ -13,7 +13,7 @@
     <div class="max-w-4xl mx-auto px-4 py-12">
         <header class="border-b border-slate-800 pb-6 mb-8">
             <h1 class="text-3xl font-extrabold tracking-tight text-white sm:text-4xl">Batch SRA Pipeline Hub</h1>
-            <p class="mt-2 text-sm text-slate-400">Compile multiple follow up plan spreadsheets and code review sheets into a comprehensive departmental SRA report sandbox workspace</p>
+            <p class="mt-2 text-sm text-slate-400">Compile multiple follow-up plan spreadsheets and code review sheets into a comprehensive departmental SRA report sandbox workspace</p>
         </header>
 
         <main class="space-y-6">
@@ -271,35 +271,32 @@ global_sam_metrics = {"high": 0, "medium": 0, "low": 0, "aoi": 0}
 system_vulnerabilities_map = {} # Maps system -> {"V": [...], "A": [...]}
 system_code_reviews_map = {}    # Maps system -> [...]
 
-# Parse the WAB to extract the 25 distinct systems covered under Section B
 print("Parsing WAB major system description block to compile system inventory list...")
 wab_doc = Document(JS_WAB_NAME)
 
 detected_systems_list = []
 found_major_systems = False
 
+# Extends extraction specifically from "(a) The tentative major information systems..." up to "A security audit"
 for p in list(wab_doc.paragraphs):
     txt = p.text.strip()
     if not txt: continue
     
-    # Track the boundary of major systems description
-    if "major system description" in txt.lower():
+    if "(a) the tentative major information systems" in txt.lower():
         found_major_systems = True
         continue
-    if found_major_systems and "list of systems requiring to conduct pia" in txt.lower():
+    if found_major_systems and "a security audit" in txt.lower():
         found_major_systems = False
         break
         
     if found_major_systems:
-        # Match potential application names (Title lines before description paragraphs)
+        # Pull distinct system candidates ignoring descriptive blocks
         if len(txt) > 3 and not txt.startswith("This ") and not txt.startswith("A ") and not txt.startswith("Users ") and not txt.startswith("The ") and not txt.startswith("CSB ") and not txt.startswith("Typical ") and not "consists of" in txt:
-            # Clean up the name string
             cleaned_sys = re.sub(r'\\s*\\(.*\\)\\s*', '', txt).strip()
             if cleaned_sys and cleaned_sys not in detected_systems_list:
                 detected_systems_list.append(txt)
 
 if not detected_systems_list:
-    # Fallback to defaults if parsing structure deviates
     detected_systems_list = [
         "CSB Online Application Systems (CSBOA)",
         "CSB Human Resource Management Information System (CSB HRMIS)",
@@ -454,45 +451,6 @@ total_plan_findings = total_v_items_count + total_a_items_count
 total_code_findings = sum(len(c) for c in system_code_reviews_map.values())
 total_overall_findings = total_plan_findings + total_code_findings
 
-# Ingest structural boundaries from WAB directly
-print("Parsing WAB objective boundaries precisely...")
-state = "SEEKING"
-assessment_objective_text = []
-security_requirements = []
-has_captured_requirements = False
-STOP_TRIGGERS = ["projectdeliverables", "wherenecessary", "acceptancecriteria", "referencedocumentation"]
-
-for p in wab_doc.paragraphs:
-    txt = p.text.strip()
-    if not txt: continue
-    normalized_txt = txt.replace('\\xa0', ' ').strip()
-    lower_clean = re.sub(r'\\s+', '', normalized_txt.lower()).replace(",", "").replace(":", "")
-    
-    if "theobjectivesofsraaservicesare" in lower_clean:
-        state = "CAPTURING_OBJECTIVES"
-        continue
-    elif state == "CAPTURING_OBJECTIVES" and "theobjectivesofpiaservicesare" in lower_clean:
-        state = "SEEKING"
-        
-    if "governmentstandards" in lower_clean and "methodologies" in lower_clean and not has_captured_requirements:
-        state = "CAPTURING_REQUIREMENTS"
-        continue
-    if state == "CAPTURING_REQUIREMENTS":
-        if any(trigger in lower_clean for trigger in STOP_TRIGGERS):
-            state = "SEEKING"
-            has_captured_requirements = True
-            continue
-
-    if state == "CAPTURING_OBJECTIVES":
-        if not lower_clean.startswith("projectobjective") and len(normalized_txt) > 1:
-            assessment_objective_text.append(normalized_txt)
-    elif state == "CAPTURING_REQUIREMENTS":
-        if "governmentstandards" not in lower_clean and "thecontractorshallcomply" not in lower_clean:
-            cleaned_bullet = re.sub(r'^([ivxLCDM\\d\\)\\(\\.\\s*-]+)[\\)\\.]?\\s+', '', normalized_txt).strip()
-            if not cleaned_bullet: cleaned_bullet = normalized_txt
-            if cleaned_bullet and cleaned_bullet not in security_requirements: 
-                security_requirements.append(cleaned_bullet)
-
 # Cleaned, text-labeled count strings to represent exact findings dynamically in Section 13
 conclusion_plan_string = f"{global_ops_metrics['medium']} medium, {global_ops_metrics['low']} low risk and {global_ops_metrics['aoi']} AOI items"
 conclusion_code_string = f"{global_sam_metrics['medium']} medium, {global_sam_metrics['low']} low risk and {global_sam_metrics['aoi']} AOI items"
@@ -516,24 +474,27 @@ replacements = [
 
 doc = Document("batch_sra_template.docx")
 
-def run_replace_mechanism(p, lookup_tuples):
+# Force Absolute Date Synchronization across paragraph runs
+def synchronize_and_replace_dates(p, lookup_tuples):
     if p.style.name.startswith("Heading"): return
     full_text = "".join(run.text for run in p.runs)
     if not full_text.strip(): return
     modified = False
     
-    if re.search(r'\\b\\d{2}-\\d{2}-\\d{4}\\b', full_text):
-        full_text = re.sub(r'\\b\\d{2}-\\d{2}-\\d{4}\\b', current_date_numeric, full_text)
+    # 1. Match typical date strings (e.g. 25/04/2026 or 25-04-2026) and override
+    if re.search(r'\\b\\d{2}[-/]\\d{2}[-/]\\d{4}\\b', full_text):
+        full_text = re.sub(r'\\b\\d{2}[-/]\\d{2}[-/]\\d{4}\\b', current_date_numeric, full_text)
         modified = True
-    if re.search(r'\\b\\d{2}\\s+[A-Za-z]+\\s+\\d{4}\\s+to\\s+\\d{2}\\s+[A-Za-z]+\\s+\\d{4}\\b', full_text):
-        target_range = f"01 {current_date_text} to {day_str} {current_date_text}"
-        full_text = re.sub(r'\\b\\d{2}\\s+[A-Za-z]+\\s+\\d{4}\\s+to\\s+\\d{2}\\s+[A-Za-z]+\\s+\\d{4}\\b', target_range, full_text)
+    # 2. Match typical month ranges (e.g. Sep 2025 to Feb 2026) and align to report date
+    if re.search(r'\\b[A-Za-z]{3}\\s+\\d{4}\\s+to\\s+[A-Za-z]{3}\\s+\\d{4}\\b', full_text):
+        full_text = re.sub(r'\\b[A-Za-z]{3}\\s+\\d{4}\\s+to\\s+[A-Za-z]{3}\\s+\\d{4}\\b', current_date_text, full_text)
         modified = True
-    elif re.search(r'\\b\\d{2}\\s+[A-Za-z]+\\s+\\d{4}\\b', full_text):
-        full_text = re.sub(r'\\b\\d{2}\\s+[A-Za-z]+\\s+\\d{4}\\b', f"{day_str} {current_date_text}", full_text)
+    # 3. Match typical standalone months (e.g. June 2026 or late 2025) and align to report date
+    if re.search(r'\\b(?:January|February|March|April|May|June|July|August|September|October|November|December)\\s+\\d{4}\\b', full_text, re.IGNORECASE):
+        full_text = re.sub(r'\\b(?:January|February|March|April|May|June|July|August|September|October|November|December)\\s+\\d{4}\\b', current_date_text, full_text, flags=re.IGNORECASE)
         modified = True
-    elif re.search(r'\\b(?:January|February|March|April|May|June|July|August|September|October|November|December)\\s+\\d{4}\\b', full_text):
-        full_text = re.sub(r'\\b(?:January|February|March|April|May|June|July|August|September|October|November|December)\\s+\\d{4}\\b', current_date_text, full_text)
+    if "late 2025" in full_text.lower():
+        full_text = full_text.replace("late 2025", current_date_text)
         modified = True
 
     for k, val in lookup_tuples:
@@ -541,11 +502,33 @@ def run_replace_mechanism(p, lookup_tuples):
             pattern = re.compile(re.escape(k), re.IGNORECASE)
             full_text = pattern.sub(val, full_text)
             modified = True
+            
     if modified:
         if p.runs:
             p.runs[0].text = full_text
             for r in p.runs[1:]: r.text = ""
         else: p.text = full_text
+
+# Parse SRA 1.1 Part A and B strictly based on new pointers: starts with "to" (case-insensitive), ends at Section 1.2 "The scope of the services"
+print("Parsing WAB Section 1.1 with specific paragraph filters...")
+sra_1_1_paragraphs = []
+found_sra_1_1 = False
+
+for p in list(wab_doc.paragraphs):
+    txt = p.text.strip()
+    if not txt: continue
+    
+    if "1.1" in txt and "security risk assessment" in txt.lower():
+        found_sra_1_1 = True
+        continue
+    if found_sra_1_1 and "the scope of the services" in txt.lower():
+        found_sra_1_1 = False
+        break
+        
+    if found_sra_1_1:
+        # Check if the paragraph starts with "To" or "to"
+        if txt.lower().startswith("to"):
+            sra_1_1_paragraphs.append(txt)
 
 body_elements = doc.element.body
 tbl_index_map = {child: idx for idx, child in enumerate(body_elements) if isinstance(child, CT_Tbl)}
@@ -554,105 +537,77 @@ has_populated_section_9 = False
 for p_idx, p in enumerate(list(doc.paragraphs)):
     lower_normalized = p.text.lower().replace(" ", "").replace(",", "")
     
-    if p_idx < 15 and any(m in p.text.lower() for m in ["june 2026", "july 2026", "may 2026"]):
-        p.text = current_date_text
-        continue
-
-    if "*system names copied from sra 1.1 part b*" in p.text.lower() or "*system names copied from wab 1.1 part b*" in p.text.lower():
+    # Replace Section 1.1 with custom parsed "To" paragraphs
+    if "copyfromsra1.1partaandb" in lower_normalized:
         p.text = ""
         current_anchor = p
-        for s_name in detected_systems_list:
-            current_anchor = insert_paragraph_after(current_anchor, f"• {s_name}", style='Normal')
+        if sra_1_1_paragraphs:
+            for line in sra_1_1_paragraphs:
+                current_anchor = insert_paragraph_after(current_anchor, line, style='Normal')
+        else:
+            p.text = "To assess overall departmental security risk posture dynamically."
         continue
 
     if "copyfromwabsection3.1" in lower_normalized:
         p.text = ""
         current_anchor = p
-        if assessment_objective_text:
-            for line in assessment_objective_text:
+        # Section 4 - copy only from objectives of SRAA up to objectives of PIA
+        # Extract from "objectives of sraa" up to "objectives of pia services" excluding "the objectives of sraa services are:"
+        found_obj = False
+        captured_obj = []
+        for wp in wab_doc.paragraphs:
+            wtxt = wp.text.strip()
+            if "objectives of sraa services" in wtxt.lower() or "objectives of sraa" in wtxt.lower():
+                found_obj = True
+                continue
+            if found_obj and ("objectives of pia services" in wtxt.lower() or "privacy impact assessment" in wtxt.lower()):
+                found_obj = False
+                break
+            if found_obj and wtxt:
+                captured_obj.append(wtxt)
+                
+        if captured_obj:
+            for line in captured_obj:
                 current_anchor = insert_paragraph_after(current_anchor, line, style='List Bullet')
         else:
             p.text = "To evaluate structural compliance and analyze risks metrics dynamically."
         continue
 
-    if "copyfromwabsection4.1.3" in lower_normalized or "copyfromwabsection4.1.3sectiona" in lower_normalized:
-        if not has_populated_section_9:
-            has_populated_section_9 = True
-            p.text = ""
-            intro_sentence = f"{company_abbr} referred to the following framework standards during execution:"
-            current_anchor = insert_paragraph_after(p, intro_sentence, style='Normal')
-            for item in security_requirements:
-                current_anchor = insert_paragraph_after(current_anchor, item, style='List Bullet')
-        else:
-            p.text = ""
-        continue
+    # Clean up dates in regular text
+    synchronize_and_replace_dates(p, replacements)
 
-    # Injection logic for Section 12.1 (V rows then A rows sorted cleanly by system name)
-    if "refer to annex f" in p.text.lower() and "12.1" in p.text.lower() or "vulnerability assessment" in p.text.lower() and "12.1" in p.text.lower():
-        current_node = p._p.getnext()
-        while current_node is not None and not isinstance(current_node, CT_Tbl):
-            current_node = current_node.getnext()
-        if current_node is not None and current_node in tbl_index_map:
-            target_table = doc.tables[list(tbl_index_map.keys()).index(current_node)]
-            for s_name in detected_systems_list:
-                v_list = system_vulnerabilities_map.get(s_name, {}).get("V", [])
-                a_list = system_vulnerabilities_map.get(s_name, {}).get("A", [])
-                for row_item in (v_list + a_list):
-                    new_row = target_table.add_row()
-                    for cell_idx, val in enumerate(row_item):
-                        if cell_idx < len(new_row.cells):
-                            apply_text_styling_and_borders(new_row.cells[cell_idx], str(val))
-        p.text = ""
-        continue
-
-    # Injection logic for Section 12.2 (C rows grouped cleanly by system name)
-    if "12.2" in p.text.lower() and "code review" in p.text.lower():
-        current_node = p._p.getnext()
-        while current_node is not None and not isinstance(current_node, CT_Tbl):
-            current_node = current_node.getnext()
-        if current_node is not None and current_node in tbl_index_map:
-            target_table = doc.tables[list(tbl_index_map.keys()).index(current_node)]
-            for s_name in detected_systems_list:
-                c_list = system_code_reviews_map.get(s_name, [])
-                for row_item in c_list:
-                    new_row = target_table.add_row()
-                    for cell_idx, val in enumerate(row_item):
-                        if cell_idx < len(new_row.cells):
-                            apply_text_styling_and_borders(new_row.cells[cell_idx], str(val))
-        p.text = ""
-        continue
-
-    run_replace_mechanism(p, replacements)
-
-# Process Table Structural Layout Rules safely row-by-row (Neutralizing Merged Cell IndexErrors)
+# Process Table structures row-by-row
 for table in doc.tables:
     if len(table.rows) == 0 or len(table.rows[0].cells) == 0: continue
     first_row_text = "".join(cell.text.lower() for cell in table.rows[0].cells)
     
-    # Section 3: Scope Table Isolation (Separate rows per system, omit tier column)
-    if "it system/it infrastructure" in first_row_text and "system tier" in first_row_text:
-        # Wipe placeholders out safely
+    # Section 3: Scope Table Isolation (Numbers only in Col 1, parsed system names in Col 2)
+    if "it system/it infrastructure" in first_row_text:
+        # Wipe template placeholders
         for r_idx in range(len(table.rows) - 1, 0, -1):
             table._tbl.remove(table.rows[r_idx]._tr)
-        for s_name in detected_systems_list:
+        for idx, s_name in enumerate(detected_systems_list):
             new_row = table.add_row()
-            apply_text_styling_and_borders(new_row.cells[0], str(s_name))
-            apply_text_styling_and_borders(new_row.cells[1], "") # Leave tier blank per instructions
+            apply_text_styling_and_borders(new_row.cells[0], str(idx + 1), center=True) # Numbers only
+            apply_text_styling_and_borders(new_row.cells[1], str(s_name))
+            if len(new_row.cells) > 2:
+                apply_text_styling_and_borders(new_row.cells[2], "")
         continue
 
-    # Section 6: Timeframe Matrix Isolation (Omit scan dates, write clean Row Num + System Name)
+    # Section 6: Timeframe Matrix (Sequential numbering, in-scope system names, clean blank date slots)
     if "date of network & host levels" in first_row_text or "time frame" in first_row_text:
         for r_idx in range(len(table.rows) - 1, 0, -1):
             table._tbl.remove(table.rows[r_idx]._tr)
         for idx, s_name in enumerate(detected_systems_list):
             new_row = table.add_row()
-            apply_text_styling_and_borders(new_row.cells[0], str(idx + 1))
+            apply_text_styling_and_borders(new_row.cells[0], str(idx + 1), center=True)
             apply_text_styling_and_borders(new_row.cells[1], str(s_name))
-            # Pad empty cells cleanly for structural sizing symmetry
+            # Leave remaining cells empty to denote scheduled activity slots beautifully
             for c_idx in range(2, len(new_row.cells)):
                 apply_text_styling_and_borders(new_row.cells[c_idx], "")
         continue
 
+    # Table Date and Metadata Patching
     if "role" in first_row_text and "action" in first_row_text:
         for row in table.rows:
             f_text = row.cells[0].text.lower() if row.cells else ""
@@ -672,7 +627,7 @@ for table in doc.tables:
                 break
         continue
 
-    # Dual Summary Tables Synchronization Engine (Fills Section 2.1 & Section 11.3 seamlessly)
+    # Dual Summary Tables Synchronization Engine (Fills Section 2.1 & Section 11.3)
     is_summary_table = False
     for row in table.rows:
         r_text = "".join(c.text.lower() for c in row.cells)
@@ -683,12 +638,10 @@ for table in doc.tables:
     if is_summary_table:
         for r_idx, row in enumerate(table.rows):
             f_cell_text = row.cells[0].text.lower() if row.cells else ""
-            
-            # Identify if this is the very last row (the total row right after compliance)
             is_last_row = (r_idx == len(table.rows) - 1)
             
             if is_last_row:
-                # Accumulate multi-domain total summation rows accurately in the final row
+                # Direct accumulation of metrics onto the absolute last row (following compliance)
                 h_t = global_ops_metrics["high"] + global_sam_metrics["high"]
                 m_t = global_ops_metrics["medium"] + global_sam_metrics["medium"]
                 l_t = global_ops_metrics["low"] + global_sam_metrics["low"]
@@ -716,17 +669,17 @@ for table in doc.tables:
                 apply_text_styling_and_borders(row.cells[4], str(metrics[3]), center=True)
                 apply_text_styling_and_borders(row.cells[5], str(total_row), center=True)
             elif any(domain in f_cell_text for domain in ["management", "policies", "human", "asset", "access", "cryptography", "physical", "communications", "outsourcing", "incident", "business", "compliance"]):
-                # Clear all secondary administrative tracking cells to zero
                 for idx in range(1, 6):
                     apply_text_styling_and_borders(row.cells[idx], "0", center=True)
         continue
 
+    # Synchronize and clean dates inside all cell elements
     for row in table.rows:
         for cell in row.cells:
             for cell_p in cell.paragraphs: 
-                run_replace_mechanism(cell_p, replacements)
+                synchronize_and_replace_dates(cell_p, replacements)
 
-# Final global template cleaner pass to clean up tokens
+# Final template pass to remove asterisks cleanly
 for p in doc.paragraphs:
     for run in p.runs:
         if "*" in run.text: run.text = run.text.replace("*", "")
