@@ -44,7 +44,7 @@
             <!-- DATA SOURCE FILE UPLOADS -->
             <section class="bg-slate-800 rounded-lg p-6 border border-slate-700 shadow-xl space-y-4">
                 <h2 class="text-xl font-bold text-white mb-2">Mandatory Document Batch Collection</h2>
-                <p class="text-xs text-slate-400 mb-4">Note: The base template file must be placed in your repository folder named exactly <code class="text-blue-400">batch SRA template.docx</code>.</p>
+                <p class="text-xs text-slate-400 mb-4">Note: The base template file must be placed in your repository folder named exactly <code class="text-blue-400">batch SRA template_4.docx</code>.</p>
                 
                 <div class="space-y-4">
                     <div class="p-4 bg-slate-950 border border-dashed border-blue-500/50 rounded-lg">
@@ -153,10 +153,10 @@
             const monthNum = String(today.getMonth() + 1).padStart(2, '0');
             const computedDateNumeric = `${dayNum}-${monthNum}-${yearText}`;
 
-            logToConsole("Fetching base 'batch SRA template.docx' file blueprint...");
+            logToConsole("Fetching base 'batch SRA template_4.docx' file blueprint...");
             try {
-                const response = await fetch("./batch%20SRA%20template.docx");
-                if (!response.ok) throw new Error("Template access error 404. Check that 'batch SRA template.docx' is tracked in root folder.");
+                const response = await fetch("./batch%20SRA%20template_4.docx");
+                if (!response.ok) throw new Error("Template access error 404. Check that 'batch SRA template_4.docx' is tracked in the root folder.");
                 const templateBuffer = await response.arrayBuffer();
                 const templateData = new Uint8Array(templateBuffer);
                 
@@ -538,9 +538,9 @@ for p in list(wab_doc.paragraphs):
     if found_env:
         environment_paragraphs.append(txt)
 
-# Process paragraphs to handle placeholders and date alignment
+# Process paragraphs to handle placeholders, system name arrays, and date alignment
 for p_idx, p in enumerate(list(doc.paragraphs)):
-    lower_normalized = p.text.lower().replace(" ", "").replace(",", "")
+    lower_normalized = p.text.lower().replace(" ", "").replace(",", "").replace("*", "")
     
     # Replace Section 1.1 Custom Paragraph Block
     if "copyfromsra1.1partaandb" in lower_normalized:
@@ -551,6 +551,28 @@ for p_idx, p in enumerate(list(doc.paragraphs)):
                 current_anchor = insert_paragraph_after(current_anchor, line, style='Normal')
         else:
             p.text = "To evaluate security controls and verify compliance metrics."
+        continue
+
+    # 1. Executive Summary Pointer: *system names copied from SRA 1.1 part B*
+    if "systemnamescopiedfromsra1.1partb" in lower_normalized and (p_idx < 100):
+        p.text = ""
+        current_anchor = p
+        if detected_systems_list:
+            for idx, s_name in enumerate(detected_systems_list):
+                current_anchor = insert_paragraph_after(current_anchor, f"{idx + 1}.  {s_name}", style='Normal')
+        else:
+            p.text = "No system items found in scope."
+        continue
+
+    # 2. Section 8 Current Environment Description Pointer: *system names copied from SRA 1.1 part B*
+    if "systemnamescopiedfromsra1.1partb" in lower_normalized and (p_idx >= 100):
+        p.text = ""
+        current_anchor = p
+        if detected_systems_list:
+            for idx, s_name in enumerate(detected_systems_list):
+                current_anchor = insert_paragraph_after(current_anchor, f"{idx + 1}.  {s_name}", style='Normal')
+        else:
+            p.text = "No system items found in scope."
         continue
 
     # Replace Section 8 Custom Environment Block
