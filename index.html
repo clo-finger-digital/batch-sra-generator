@@ -155,7 +155,7 @@
 
             logToConsole("Fetching base 'batch SRA template_4.docx' file blueprint...");
             try {
-                const response = await fetch("./batch%20SRA%20template_4.docx");
+                const response = await fetch("./batch%20SRA%20template.docx");
                 if (!response.ok) throw new Error("Template access error 404. Check that 'batch SRA template_4.docx' is tracked in the root folder.");
                 const templateBuffer = await response.arrayBuffer();
                 const templateData = new Uint8Array(templateBuffer);
